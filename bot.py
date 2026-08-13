@@ -1,9 +1,9 @@
 import os
 import logging
+import base64
 from io import BytesIO
 
-import requests
-from flask import Flask
+from openai import AsyncOpenAI
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -13,61 +13,53 @@ from telegram.ext import (
     filters,
 )
 
-# =========================
-# CONFIGURATION
-# =========================
-
+# Get secret keys from Render environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-IMAGE_API_URL = os.getenv("IMAGE_API_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# OpenAI client
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# Logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+    level=logging.INFO
 )
 
-# Flask app for Render
-app = Flask(__name__)
-
-
-@app.route("/")
-def home():
-    return "AI Image Generator Bot is running!"
-
-
-# =========================
-# TELEGRAM COMMANDS
-# =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎨 Welcome to the AI Image Generator Bot!\n\n"
-        "Send me an image description and I will generate it for you.\n\n"
+        "Send me an image description and I will generate it.\n\n"
         "Example:\n"
         "A futuristic city at night, cinematic lighting"
     )
 
 
-async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def generate_image(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     prompt = update.message.text
 
     await update.message.reply_text(
-        "🎨 Generating your image...\nPlease wait."
+        "🎨 Generating your image...\nPlease wait..."
     )
 
     try:
-        # Request image from your image generation API
-        response = requests.post(
-            IMAGE_API_URL,
-            json={
-                "prompt": prompt
-            },
-            timeout=120
+        response = await client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt,
+            size="1024x1024",
+            quality="medium",
         )
 
-        response.raise_for_status()
+        # GPT Image returns the image as base64 data
+        image_base64 = response.data[0].b64_json
+        image_bytes = base64.b64decode(image_base64)
 
-        # If API returns the actual image
-        image = BytesIO(response.content)
+        image = BytesIO(image_bytes)
+        image.name = "generated_image.png"
 
         await update.message.reply_photo(
             photo=image,
@@ -78,14 +70,10 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Image generation error: {e}")
 
         await update.message.reply_text(
-            "❌ Sorry, I couldn't generate the image.\n"
-            "Please try again."
+            "❌ Sorry, I couldn't generate the image.\n\n"
+            "Please try again with another prompt."
         )
 
-
-# =========================
-# START BOT
-# =========================
 
 def main():
     application = (
@@ -104,6 +92,8 @@ def main():
             generate_image
         )
     )
+
+    print("Bot is running...")
 
     application.run_polling()
 
