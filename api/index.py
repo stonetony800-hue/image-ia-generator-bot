@@ -11,18 +11,20 @@ from openai import OpenAI
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 def telegram_request(method, data):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}"
 
-    encoded_data = urllib.parse.urlencode(data).encode("utf-8")
+    encoded = urllib.parse.urlencode(data).encode("utf-8")
 
     request = urllib.request.Request(
         url,
-        data=encoded_data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data=encoded,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded"
+        },
         method="POST",
     )
 
@@ -40,24 +42,24 @@ def send_message(chat_id, text):
     )
 
 
-def send_photo(chat_id, image_bytes, caption):
-    boundary = "----TelegramBoundary123456789"
+def send_photo(chat_id, image_bytes):
+    boundary = "----TelegramBoundary"
 
-    body = []
+    parts = []
 
-    body.append(
+    parts.append(
         f"--{boundary}\r\n"
         'Content-Disposition: form-data; name="chat_id"\r\n\r\n'
         f"{chat_id}\r\n"
     )
 
-    body.append(
+    parts.append(
         f"--{boundary}\r\n"
         'Content-Disposition: form-data; name="caption"\r\n\r\n'
-        f"{caption}\r\n"
+        "✨ Your AI-generated image\r\n"
     )
 
-    body_bytes = "".join(body).encode("utf-8")
+    header = "".join(parts).encode("utf-8")
 
     file_header = (
         f"--{boundary}\r\n"
@@ -67,13 +69,13 @@ def send_photo(chat_id, image_bytes, caption):
 
     ending = f"\r\n--{boundary}--\r\n".encode("utf-8")
 
-    final_body = body_bytes + file_header + image_bytes + ending
+    body = header + file_header + image_bytes + ending
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
 
     request = urllib.request.Request(
         url,
-        data=final_body,
+        data=body,
         headers={
             "Content-Type": f"multipart/form-data; boundary={boundary}"
         },
@@ -84,14 +86,17 @@ def send_photo(chat_id, image_bytes, caption):
         return response.read()
 
 
-def generate_image(prompt):
-    result = openai_client.images.generate(
+def create_image(prompt):
+    result = client.images.generate(
         model="gpt-image-1",
         prompt=prompt,
         size="1024x1024",
     )
 
     image_base64 = result.data[0].b64_json
+
+    if not image_base64:
+        raise Exception("OpenAI did not return image data.")
 
     return base64.b64decode(image_base64)
 
@@ -102,27 +107,31 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
+
         self.wfile.write(
             b"AI Image Generator Telegram Bot is running!"
         )
 
     def do_POST(self):
+
         try:
-            content_length = int(
+            length = int(
                 self.headers.get("Content-Length", 0)
             )
 
-            body = self.rfile.read(content_length)
+            body = self.rfile.read(length)
 
-            update = json.loads(body.decode("utf-8"))
+            update = json.loads(
+                body.decode("utf-8")
+            )
 
-            if "message" not in update:
+            message = update.get("message")
+
+            if not message:
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"OK")
                 return
-
-            message = update["message"]
 
             chat_id = message["chat"]["id"]
 
@@ -135,36 +144,39 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             if text == "/start":
+
                 send_message(
                     chat_id,
                     "👋 Welcome to the AI Image Generator!\n\n"
                     "Send me a description of the image you want.\n\n"
                     "Example:\n"
-                    "A futuristic city at night, cinematic lighting",
+                    "A futuristic city at night, cinematic lighting"
                 )
 
             else:
+
                 send_message(
                     chat_id,
-                    "🎨 Creating your image... Please wait.",
+                    "🎨 Creating your image... Please wait."
                 )
 
                 try:
-                    image_bytes = generate_image(text)
+
+                    image = create_image(text)
 
                     send_photo(
                         chat_id,
-                        image_bytes,
-                        "✨ Your AI-generated image",
+                        image
                     )
 
                 except Exception as error:
-                    print("IMAGE ERROR:", error)
+
+                    print("IMAGE ERROR:", repr(error))
 
                     send_message(
                         chat_id,
-                        "❌ I couldn't generate the image right now.\n\n"
-                        "Please try another prompt.",
+                        "❌ Image generation failed.\n\n"
+                        f"Error: {str(error)[:800]}"
                     )
 
             self.send_response(200)
@@ -172,7 +184,8 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(b"OK")
 
         except Exception as error:
-            print("WEBHOOK ERROR:", error)
+
+            print("WEBHOOK ERROR:", repr(error))
 
             self.send_response(500)
             self.end_headers()
